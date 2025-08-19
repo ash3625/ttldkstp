@@ -206,10 +206,4 @@ def delete(code: str):
     cur.execute("DELETE FROM urls WHERE short = ?", (code,))
     conn.commit()
     conn.close()
-    return redirect(url_for("index"))    # 웹브라우저 자동 오픈 부분은 Render에서 불필요하므로 주석 처리
-    # webbrowser.open("http://127.0.0.1:5000")
-
-    # Render와 같은 클라우드 환경에 맞게 서버를 0.0.0.0에 바인딩
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
-
+    return redirect(url_for("index"))
