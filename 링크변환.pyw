@@ -102,6 +102,9 @@ PAGE = """
       <div class="item">
         <div><strong>{{ request.host_url }}{{ row['short'] }}</strong></div>
         <div class="muted">→ <a href="{{ row['original'] }}" target="_blank">{{ row['original'] }}</a></div>
+        <form method="post" action="{{ url_for('delete', code=row['short']) }}" style="display:inline;">
+            <button type="submit" class="btn" style="background:red;">삭제</button>
+        </form>
       </div>
       {% endfor %}
     {% else %}
@@ -193,3 +196,20 @@ if __name__ == "__main__":
     # Render와 같은 클라우드 환경에 맞게 서버를 0.0.0.0에 바인딩
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+# ----------------------- 삭제 기능 추가 --------------------------
+
+@app.route("/delete/<code>", methods=["POST"])
+def delete(code: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM urls WHERE short = ?", (code,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("index"))    # 웹브라우저 자동 오픈 부분은 Render에서 불필요하므로 주석 처리
+    # webbrowser.open("http://127.0.0.1:5000")
+
+    # Render와 같은 클라우드 환경에 맞게 서버를 0.0.0.0에 바인딩
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
+
