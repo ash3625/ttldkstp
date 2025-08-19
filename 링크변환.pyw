@@ -1,207 +1,173 @@
-from flask import Flask, request, redirect, render_template_string, url_for, abort
+import os
 import sqlite3
 import string
 import random
-from urllib.parse import urlparse
-import os
-import webbrowser
+from datetime import datetime
+import markdown
 
-DB_PATH = "urls.db"
+from flask import Flask, render_template, request, redirect, url_for, g
+
+# --- 환경 설정 및 데이터베이스 초기화 ---
 
 app = Flask(__name__)
+# 데이터베이스 파일 경로
+DATABASE = 'database.db'
 
-# ----------------------- DB Helpers -----------------------
+# 데이터베이스 연결 가져오기
+def get_db():
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(DATABASE)
+        # 딕셔너리 형태로 결과를 반환하도록 설정
+        db.row_factory = sqlite3.Row
+    return db
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# 애플리케이션 컨텍스트 종료 시 데이터베이스 연결 닫기
+@app.teardown_appcontext
+def close_connection(exception):
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
 
-
+# 데이터베이스 테이블 초기화
 def init_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS urls (
-            short TEXT PRIMARY KEY,
-            original TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
+    with app.app_context():
+        db = get_db()
+        cursor = db.cursor()
+        
+        # 'urls' 테이블 생성
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS urls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                short_code TEXT UNIQUE NOT NULL,
+                original_url TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # 'posts' 테이블 생성 (블로그 게시물용)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        db.commit()
 
+# --- 도우미 함수 ---
 
-# ----------------------- Utils ----------------------------
+# 랜덤 단축 코드 생성
+def generate_short_code(length=6):
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choice(characters) for _ in range(length))
 
-ALPHABET = string.ascii_letters + string.digits
+# --- 웹사이트 라우트 ---
 
-
-def generate_code(length: int = 6) -> str:
-    return "".join(random.choice(ALPHABET) for _ in range(length))
-
-
-def looks_like_url(value: str) -> bool:
-    try:
-        parsed = urlparse(value)
-        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-    except Exception:
-        return False
-
-
-# ----------------------- HTML (Minimal) -------------------
-
-PAGE = """
-<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>나만의 단축링크</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 40px auto; max-width: 720px; line-height: 1.6; }
-    .card { border: 1px solid #e5e7eb; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
-    input[type=text] { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 10px; }
-    .row { display: grid; gap: 12px; }
-    .btn { display: inline-block; padding: 10px 14px; border-radius: 10px; border: 0; background: #111827; color: white; cursor: pointer; }
-    .muted { color: #6b7280; font-size: 14px; }
-    .list { margin-top: 24px; }
-    .item { padding: 10px 0; border-bottom: 1px dashed #e5e7eb; }
-    code { background: #f3f4f6; padding: 3px 6px; border-radius: 6px; }
-  </style>
-</head>
-<body>
-  <h1>🔗 나만의 단축링크</h1>
-  <div class="card">
-    <form method="post" action="{{ url_for('shorten') }}">
-      <div class="row">
-        <label>원본 URL</label>
-        <input type="text" name="long_url" placeholder="https://example.com/article/123" required />
-        <label>커스텀 코드 (선택)</label>
-        <input type="text" name="custom_code" placeholder="예: hello, promo2025" />
-        <button class="btn" type="submit">단축하기</button>
-        <div class="muted">결과 예: {{ request.host_url }}<code>abc123</code> 또는 {{ request.host_url }}<code>hello</code></div>
-      </div>
-    </form>
-  </div>
-
-  {% if short_url %}
-  <div class="card" style="margin-top:20px;">
-    <h3>✅ 단축 완료</h3>
-    <p><a href="{{ short_url }}" target="_blank">{{ short_url }}</a></p>
-    <button class="btn" onclick="navigator.clipboard.writeText('{{ short_url }}'); this.innerText='복사됨!';">주소 복사</button>
-  </div>
-  {% endif %}
-
-  <div class="list">
-    <h3>최근 생성된 링크</h3>
-    {% if recent %}
-      {% for row in recent %}
-      <div class="item">
-        <div><strong>{{ request.host_url }}{{ row['short'] }}</strong></div>
-        <div class="muted">→ <a href="{{ row['original'] }}" target="_blank">{{ row['original'] }}</a></div>
-        <form method="post" action="{{ url_for('delete', code=row['short']) }}" style="display:inline;">
-            <button type="submit" class="btn" style="background:red;">삭제</button>
-        </form>
-      </div>
-      {% endfor %}
-    {% else %}
-      <div class="muted">아직 생성된 링크가 없습니다.</div>
-    {% endif %}
-  </div>
-</body>
-</html>
-"""
-
-# ----------------------- Routes --------------------------
-
-# 삭제 기능은 URL을 생성하는 페이지보다 먼저 정의되어야 함
-@app.route("/delete/<code>", methods=["POST"])
-def delete(code: str):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM urls WHERE short = ?", (code,))
-    conn.commit()
-    conn.close()
-    return redirect(url_for("index"))
-
-@app.route("/", methods=["GET"])
+# 홈 페이지 (단축링크)
+@app.route('/')
 def index():
-    conn = get_db_connection()
-    recent = conn.execute(
-        "SELECT short, original FROM urls ORDER BY created_at DESC LIMIT 10"
-    ).fetchall()
-    conn.close()
-    return render_template_string(PAGE, recent=recent, short_url=None)
+    db = get_db()
+    cursor = db.cursor()
+    # 최근 10개의 링크를 생성일 기준 내림차순으로 가져오기
+    cursor.execute("SELECT short_code AS short, original_url AS original FROM urls ORDER BY created_at DESC LIMIT 10")
+    recent_links = cursor.fetchall()
+    return render_template('index.html', recent=recent_links)
 
-
-@app.route("/shorten", methods=["POST"])
+# URL 단축 처리
+@app.route('/shorten', methods=['POST'])
 def shorten():
-    long_url = (request.form.get("long_url") or "").strip()
-    custom_code = (request.form.get("custom_code") or "").strip()
+    original_url = request.form['long_url']
+    custom_code = request.form.get('custom_code')
 
-    if not looks_like_url(long_url):
-        return ("유효한 http(s):// URL을 입력하세요.", 400)
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    def exists(code: str) -> bool:
-        row = cur.execute("SELECT 1 FROM urls WHERE short = ?", (code,)).fetchone()
-        return row is not None
+    db = get_db()
+    cursor = db.cursor()
 
     if custom_code:
-        allowed = set(string.ascii_letters + string.digits + "-_")
-        if not set(custom_code) <= allowed:
-            conn.close()
-            return ("커스텀 코드는 영문/숫자, -, _ 만 사용할 수 있습니다.", 400)
-        code = custom_code
-        if exists(code):
-            conn.close()
-            return ("이미 사용 중인 코드입니다. 다른 코드를 입력하세요.", 409)
+        # 커스텀 코드가 이미 존재하는지 확인
+        cursor.execute("SELECT * FROM urls WHERE short_code = ?", (custom_code,))
+        if cursor.fetchone():
+            return "이미 사용 중인 커스텀 코드입니다.", 409
+        short_code = custom_code
     else:
-        code = generate_code(6)
-        while exists(code):
-            code = generate_code(6)
+        # 고유한 랜덤 코드 생성
+        while True:
+            short_code = generate_short_code()
+            cursor.execute("SELECT * FROM urls WHERE short_code = ?", (short_code,))
+            if cursor.fetchone() is None:
+                break
+    
+    # 데이터베이스에 저장
+    cursor.execute("INSERT INTO urls (short_code, original_url) VALUES (?, ?)", (short_code, original_url))
+    db.commit()
 
-    cur.execute("INSERT INTO urls (short, original) VALUES (?, ?)", (code, long_url))
-    conn.commit()
-    conn.close()
+    short_url = url_for('redirect_to_long_url', code=short_code, _external=True)
+    return render_template('index.html', short_url=short_url)
 
-    short_url = request.host_url + code
-
-    conn2 = get_db_connection()
-    recent = conn2.execute(
-        "SELECT short, original FROM urls ORDER BY created_at DESC LIMIT 10"
-    ).fetchall()
-    conn2.close()
-
-    return render_template_string(PAGE, recent=recent, short_url=short_url)
-
-
-@app.route("/<code>")
-def follow(code: str):
-    conn = get_db_connection()
-    row = conn.execute("SELECT original FROM urls WHERE short = ?", (code,)).fetchone()
-    conn.close()
-    if not row:
-        abort(404, description="존재하지 않는 단축 URL입니다.")
-    return redirect(row["original"], code=302)
-
-
-# ----------------------- Main ----------------------------
-
-if __name__ == "__main__":
-    if not os.path.exists(DB_PATH):
-        init_db()
+# 단축 URL 리디렉션
+@app.route('/<string:code>')
+def redirect_to_long_url(code):
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT original_url FROM urls WHERE short_code = ?", (code,))
+    result = cursor.fetchone()
+    if result:
+        return redirect(result['original_url'])
     else:
-        init_db()
+        return "URL을 찾을 수 없습니다.", 404
 
-    # 웹브라우저 자동 오픈 부분은 Render에서 불필요하므로 주석 처리
-    # webbrowser.open("http://127.0.0.1:5000")
+# 링크 삭제
+@app.route('/delete/<string:code>', methods=['POST'])
+def delete(code):
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM urls WHERE short_code = ?", (code,))
+    db.commit()
+    return redirect(url_for('index'))
 
-    # Render와 같은 클라우드 환경에 맞게 서버를 0.0.0.0에 바인딩
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+# 블로그 페이지
+@app.route('/blog')
+def blog():
+    db = get_db()
+    cursor = db.cursor()
+    # 모든 블로그 게시물 가져오기
+    cursor.execute("SELECT id, title, created_at FROM posts ORDER BY created_at DESC")
+    posts = cursor.fetchall()
+    return render_template('blog.html', posts=posts)
+
+# 개별 블로그 게시물 페이지
+@app.route('/blog/<int:post_id>')
+def post(post_id):
+    db = get_db()
+    cursor = db.cursor()
+    # 특정 ID의 게시물 가져오기
+    cursor.execute("SELECT title, content, created_at FROM posts WHERE id = ?", (post_id,))
+    post_data = cursor.fetchone()
+    
+    if post_data:
+        # Markdown 내용을 HTML로 변환
+        post_html_content = markdown.markdown(post_data['content'])
+        return render_template('post.html', post=post_data, post_html_content=post_html_content)
+    else:
+        return "게시물을 찾을 수 없습니다.", 404
+
+# 소개 페이지
+@app.route('/about')
+def about():
+    return render_template('about.html')
+
+# --- 애플리케이션 실행 ---
+
+if __name__ == '__main__':
+    # 애플리케이션 실행 전에 데이터베이스 초기화
+    init_db()
+    # 샘플 블로그 게시물 추가 (테스트용)
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT OR IGNORE INTO posts (id, title, content) VALUES (?, ?, ?)", 
+                   (1, "나의 첫 번째 블로그 글", "이것은 **Markdown**으로 작성된 첫 번째 블로그 게시물입니다. `코드`도 포함할 수 있어요. \n\n* 안녕하세요\n* 반갑습니다"))
+        db.execute("INSERT OR IGNORE INTO posts (id, title, content) VALUES (?, ?, ?)", 
+                   (2, "웹 개발을 시작하며", "Flask를 사용한 웹사이트 개발은 정말 재미있습니다! 이 작은 프로젝트를 통해 많은 것을 배웠습니다."))
+        db.commit()
+    app.run(debug=True)
