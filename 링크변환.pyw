@@ -115,8 +115,17 @@ PAGE = """
 </html>
 """
 
-
 # ----------------------- Routes --------------------------
+
+# 삭제 기능은 URL을 생성하는 페이지보다 먼저 정의되어야 함
+@app.route("/delete/<code>", methods=["POST"])
+def delete(code: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM urls WHERE short = ?", (code,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("index"))
 
 @app.route("/", methods=["GET"])
 def index():
@@ -196,14 +205,3 @@ if __name__ == "__main__":
     # Render와 같은 클라우드 환경에 맞게 서버를 0.0.0.0에 바인딩
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-
-# ----------------------- 삭제 기능 추가 --------------------------
-
-@app.route("/delete/<code>", methods=["POST"])
-def delete(code: str):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM urls WHERE short = ?", (code,))
-    conn.commit()
-    conn.close()
-    return redirect(url_for("index"))
