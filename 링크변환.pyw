@@ -115,7 +115,7 @@ PAGE = """
 
 # ----------------------- Routes --------------------------
 
-@app.route("/", methods=["GET"]) 
+@app.route("/", methods=["GET"])
 def index():
     conn = get_db_connection()
     recent = conn.execute(
@@ -125,7 +125,7 @@ def index():
     return render_template_string(PAGE, recent=recent, short_url=None)
 
 
-@app.route("/shorten", methods=["POST"]) 
+@app.route("/shorten", methods=["POST"])
 def shorten():
     long_url = (request.form.get("long_url") or "").strip()
     custom_code = (request.form.get("custom_code") or "").strip()
@@ -169,7 +169,7 @@ def shorten():
     return render_template_string(PAGE, recent=recent, short_url=short_url)
 
 
-@app.route("/<code>") 
+@app.route("/<code>")
 def follow(code: str):
     conn = get_db_connection()
     row = conn.execute("SELECT original FROM urls WHERE short = ?", (code,)).fetchone()
@@ -187,8 +187,9 @@ if __name__ == "__main__":
     else:
         init_db()
 
-    # 서버 시작 직전에 브라우저 자동 오픈 (안정적)
-    webbrowser.open("http://127.0.0.1:5000")
+    # 웹브라우저 자동 오픈 부분은 Render에서 불필요하므로 주석 처리
+    # webbrowser.open("http://127.0.0.1:5000")
 
-    # 서버 메인 스레드에서 실행
-    app.run(debug=True)
+    # Render와 같은 클라우드 환경에 맞게 서버를 0.0.0.0에 바인딩
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
