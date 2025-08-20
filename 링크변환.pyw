@@ -3,7 +3,6 @@ import sqlite3
 import string
 import random
 from datetime import datetime
-import markdown
 
 from flask import Flask, render_template, request, redirect, url_for, g
 
@@ -15,6 +14,7 @@ DATABASE = 'database.db'
 
 # 데이터베이스 연결 가져오기
 def get_db():
+    """데이터베이스 연결 객체를 반환합니다."""
     db = getattr(g, '_database', None)
     if db is None:
         db = g._database = sqlite3.connect(DATABASE)
@@ -25,12 +25,14 @@ def get_db():
 # 애플리케이션 컨텍스트 종료 시 데이터베이스 연결 닫기
 @app.teardown_appcontext
 def close_connection(exception):
+    """애플리케이션 컨텍스트 종료 시 데이터베이스 연결을 닫습니다."""
     db = getattr(g, '_database', None)
     if db is not None:
         db.close()
 
 # 데이터베이스 테이블 초기화
 def init_db():
+    """URL을 저장할 'urls' 테이블을 초기화합니다."""
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
@@ -44,22 +46,13 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # 'posts' 테이블 생성 (블로그 게시물용)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS posts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
         db.commit()
 
 # --- 도우미 함수 ---
 
 # 랜덤 단축 코드 생성
 def generate_short_code(length=6):
+    """지정된 길이의 랜덤 단축 코드를 생성합니다."""
     characters = string.ascii_letters + string.digits
     return ''.join(random.choice(characters) for _ in range(length))
 
@@ -68,6 +61,7 @@ def generate_short_code(length=6):
 # 홈 페이지 (단축링크)
 @app.route('/')
 def index():
+    """최근 10개의 단축 링크를 표시하는 메인 페이지를 렌더링합니다."""
     db = get_db()
     cursor = db.cursor()
     # 최근 10개의 링크를 생성일 기준 내림차순으로 가져오기
@@ -78,6 +72,7 @@ def index():
 # URL 단축 처리
 @app.route('/shorten', methods=['POST'])
 def shorten():
+    """제출된 URL을 단축하고 데이터베이스에 저장합니다."""
     original_url = request.form['long_url']
     custom_code = request.form.get('custom_code')
 
@@ -108,6 +103,7 @@ def shorten():
 # 단축 URL 리디렉션
 @app.route('/<string:code>')
 def redirect_to_long_url(code):
+    """단축 코드를 원래 URL로 리디렉션합니다."""
     db = get_db()
     cursor = db.cursor()
     cursor.execute("SELECT original_url FROM urls WHERE short_code = ?", (code,))
@@ -120,54 +116,15 @@ def redirect_to_long_url(code):
 # 링크 삭제
 @app.route('/delete/<string:code>', methods=['POST'])
 def delete(code):
+    """특정 단축 코드를 삭제합니다."""
     db = get_db()
     cursor = db.cursor()
     cursor.execute("DELETE FROM urls WHERE short_code = ?", (code,))
     db.commit()
     return redirect(url_for('index'))
 
-# 블로그 페이지
-@app.route('/blog')
-def blog():
-    db = get_db()
-    cursor = db.cursor()
-    # 모든 블로그 게시물 가져오기
-    cursor.execute("SELECT id, title, created_at FROM posts ORDER BY created_at DESC")
-    posts = cursor.fetchall()
-    return render_template('blog.html', posts=posts)
-
-# 개별 블로그 게시물 페이지
-@app.route('/blog/<int:post_id>')
-def post(post_id):
-    db = get_db()
-    cursor = db.cursor()
-    # 특정 ID의 게시물 가져오기
-    cursor.execute("SELECT title, content, created_at FROM posts WHERE id = ?", (post_id,))
-    post_data = cursor.fetchone()
-    
-    if post_data:
-        # Markdown 내용을 HTML로 변환
-        post_html_content = markdown.markdown(post_data['content'])
-        return render_template('post.html', post=post_data, post_html_content=post_html_content)
-    else:
-        return "게시물을 찾을 수 없습니다.", 404
-
-# 소개 페이지
-@app.route('/about')
-def about():
-    return render_template('about.html')
-
 # --- 애플리케이션 실행 ---
-
 if __name__ == '__main__':
     # 애플리케이션 실행 전에 데이터베이스 초기화
     init_db()
-    # 샘플 블로그 게시물 추가 (테스트용)
-    with app.app_context():
-        db = get_db()
-        db.execute("INSERT OR IGNORE INTO posts (id, title, content) VALUES (?, ?, ?)", 
-                   (1, "나의 첫 번째 블로그 글", "이것은 **Markdown**으로 작성된 첫 번째 블로그 게시물입니다. `코드`도 포함할 수 있어요. \n\n* 안녕하세요\n* 반갑습니다"))
-        db.execute("INSERT OR IGNORE INTO posts (id, title, content) VALUES (?, ?, ?)", 
-                   (2, "웹 개발을 시작하며", "Flask를 사용한 웹사이트 개발은 정말 재미있습니다! 이 작은 프로젝트를 통해 많은 것을 배웠습니다."))
-        db.commit()
     app.run(debug=True)
